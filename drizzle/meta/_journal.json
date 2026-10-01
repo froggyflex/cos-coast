@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1790892407773,
+      "tag": "0000_square_rage",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1790892423728,
+      "tag": "0001_assignment_guards",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790892890356,
+      "tag": "0002_magical_mordo",
+      "breakpoints": true
+    }
+  ]
+}
