@@ -21,7 +21,7 @@ Open `/admin`, then **Sign in with ChatGPT**. In local development only, the bun
 
 Three fictional seeded bookings are available as `KOS-DEMO-0001` / `guest1@example.com`, `KOS-DEMO-0002` / `guest2@example.com`, and `KOS-DEMO-0003` / `guest3@example.com`. All dates are relative to first seed. A real demo booking can be created immediately using any future date at least two hours ahead. No email or actual transfer is arranged.
 
-If you already applied SQL manually, do not replay it with the migration helper on the same database without first recording its migration ledger. The initial workspace database was migrated manually during development; new checkouts should use the migration helper from the start. Never delete a production database to resolve a migration mismatch.
+If you already applied SQL manually, do not replay it with the migration helper on the same database without first recording its migration ledger. The initial workspace database was migrated manually during development and its verified migration ledger has now been recorded; new checkouts should use the migration helper from the start. Never delete a production database to resolve a migration mismatch.
 
 ## Implemented flows
 
@@ -81,6 +81,8 @@ npm run build
 Integration checks only accept a localhost origin. Set `TEST_ORIGIN` if using another port. They create fictional demo requests and leave them cancelled for inspection. Checks cover a round-trip quote, arrival buffer, capacity and flight validation, price tampering, duplicate submissions, auth, CSRF, lookup data minimisation, invalid transitions, stale edits, overlap transaction rollback, cancellation release, queued notifications and CSV. Domain checks cover DST gaps/ambiguity, summer/winter offsets, invalid dates and CSV escaping. Do not run repeated integration suites against production.
 
 ## Deployment
+
+**Current status:** source saved; initial hosted deployment failed with `incomplete input: SQLITE_ERROR`. The local app is working. See [DEPLOYMENT-STATUS.md](DEPLOYMENT-STATUS.md) for the exact Site/version/deployment IDs and safe recovery steps. No live URL is claimed.
 
 The source has a registered private Sites project in `.openai/hosting.json`. A successful build emits `dist/server/index.js`, client assets and migration metadata. The initial project is private; public visitors are not enabled merely by creating the customer-facing pages.
 
