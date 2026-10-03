@@ -4,6 +4,8 @@ A working booking and operations MVP for Kos, Greece. Modern abstract Mediterran
 
 **Stack:** Next.js 16 App Router, React 19, TypeScript, MongoDB Atlas (native driver), NextAuth Google OAuth, Tailwind/CSS. Deploy on Vercel using the Node.js runtime.
 
+Testing deployment: https://cos-coast.vercel.app · Operations: https://cos-coast.vercel.app/admin · GitHub: https://github.com/froggyflex/cos-coast. The Vercel project is linked to `main` for automatic deployments. Its Google callback is `https://cos-coast.vercel.app/api/auth/callback/google`.
+
 ## Local setup
 
 Use Node.js 22 LTS and npm. From this repository:
