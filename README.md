@@ -1,97 +1,113 @@
 # Kos Coast Transfers
 
-A connected transfer-booking MVP for Kos, Greece: customer requests, server-priced quotes, persistent relational records, and authenticated operations. The public experience uses an original abstract Aegean artwork, deep blue, ivory and sand. Business identity, prices, fleet and customers are demonstration data.
+A working booking and operations MVP for Kos, Greece. Modern abstract Mediterranean artwork, a mobile-first booking flow, and a Google-authenticated operations dashboard. This repository runs independently of ChatGPT/Sites.
 
-## Run locally
+**Stack:** Next.js 16 App Router, React 19, TypeScript, MongoDB Atlas (native driver), NextAuth Google OAuth, Tailwind/CSS. Deploy on Vercel using the Node.js runtime.
 
-Requires Node 22.13+ and npm. The repository includes a lockfile. From this directory:
+## Local setup
+
+Use Node.js 22 LTS and npm. From this repository:
 
 ```sh
 npm ci
-cp .env.example .dev.vars
-npm run db:migrate:local
-npm run dev -- --port 5186
+cp .env.example .env.local
+# Fill in your Atlas URI and Google OAuth credentials privately.
+npm run db:setup
+npm run db:seed
+npm run dev
 ```
 
-PowerShell: use `Copy-Item .env.example .dev.vars` instead of `cp` if preferred. If this computer's npm launcher fails, invoke `node "C:/Program Files/nodejs/node_modules/npm/bin/npm-cli.js"` instead of `npm`.
+On Windows, copy the file with `Copy-Item .env.example .env.local`. **Keep an existing `.env.local`; do not overwrite it.** Open http://localhost:3000 and http://localhost:3000/admin.
 
-Open the exact address printed by the server. The demo automatically seeds an empty database on the first catalog request when `SEED_ENABLED=true`. Seeding is explicit, bounded, transactional and idempotent; schema creation is handled only by migrations. The persistent local database lives in `.wrangler/state`, not browser storage.
+`MONGODB_URI` is the preferred connection variable; `MONGO_URI` is accepted for existing setups. Database name defaults to `coscoast`. The app creates `transfer_*` collections and does not read or modify an existing collection called `coscoast`. A database and a collection are separate things in MongoDB.
 
-Open `/admin`, then **Sign in with ChatGPT**. In local development only, the bundled preview simulates `seedy@sites.test`; `.dev.vars` explicitly allowlists this identity. There is no password, hard-coded production login, or production auth bypass. The built Worker does not include the development sign-in simulator.
+The Atlas database user needs read/write and index creation access to this database. Permit the development machine and deployment's outbound network in Atlas Network Access. Use a suitable private or fixed-egress configuration for production where available. Do not disable TLS or certificate verification. URL-encode special characters in database credentials.
 
-Three fictional seeded bookings are available as `KOS-DEMO-0001` / `guest1@example.com`, `KOS-DEMO-0002` / `guest2@example.com`, and `KOS-DEMO-0003` / `guest3@example.com`. All dates are relative to first seed. A real demo booking can be created immediately using any future date at least two hours ahead. No email or actual transfer is arranged.
-
-If you already applied SQL manually, do not replay it with the migration helper on the same database without first recording its migration ledger. The initial workspace database was migrated manually during development and its verified migration ledger has now been recorded; new checkouts should use the migration helper from the start. Never delete a production database to resolve a migration mismatch.
-
-## Implemented flows
-
-- Homepage, service descriptions, four-step booking, one-way/return, named Kos destinations, property addresses, passenger/luggage capacity, seats, flight/ferry numbers, extras, vehicle options, itemised EUR quote, contact details, requests, privacy acknowledgement and optional marketing preference.
-- Confirmation reference and reference-plus-email status lookup. A pending request is clearly distinguished from a confirmed reservation. Email is never falsely reported as sent.
-- Operations dashboard, request list and per-leg date-grouped schedule, search/status/date filters, detail and contact editing, manual booking creation, notes, payment records, driver/vehicle allocation, adjusted pickup time and operational progression.
-- New/pending → confirmed → assigned → completed, with cancellation paths and server-enforced transitions. Every leg must have an assignment before the booking can be marked assigned, and every leg must be complete before completion. Closed bookings cannot be dispatched.
-- In-app notifications, read state, persistent delivery outbox and an HTTPS provider adapter. Booking creation and status updates persist notifications atomically. Journey changes also create delivery events.
-- Configurable business/cancellation/privacy text, recipients, lead time, turnaround time, seats, destinations, zones, bidirectional routes, prices, extras, drivers, vehicles and vehicle classes.
-- Audit history for booking/contact/payment/notes and leg changes, optimistic version checks, atomic conflict rollback and spreadsheet-safe CSV export.
-
-## Architecture and database
-
-TypeScript, React 19, Next-compatible App Router through Vinext, Vite, Cloudflare Workers, Drizzle migrations and Cloudflare D1 (relational SQLite). The provided Sites runtime uses Vinext `1.0.0-beta.5`; review its compatibility and upgrade policy before a customer production launch.
-
-**This implementation uses D1, not PostgreSQL.** It was selected for the integrated persistent hosting runtime. There is no pretend Postgres connection. Database access is concentrated in `lib/db.ts` and services, and SQL is parameterised. Moving to PostgreSQL is a separate adapter/migration effort: translate the schema and conflict guards, use transactional row/advisory locking or exclusion constraints, and rerun the integration suite. Do not assume SQL can be copied unchanged.
-
-Sixteen related tables model zones, destinations, routes, vehicle classes, fleet, drivers, customers, bookings, legs, extras, booked extras, notifications, outbox, audit, business settings and rate limits. Indexes support schedule, assignment, status, customer and outbox queries. See `db/schema.ts` and the append-only `drizzle/` migrations. The custom migration adds database-level assignment overlap triggers, so competing requests cannot both reserve the same driver or vehicle. A D1 batch transaction rolls back all related writes if a conflict occurs.
-
-Money is stored as integer EUR cents. Each quote is computed on the server from a route price × vehicle-class multiplier plus extras and seats per leg. The booking submit recomputes the price and rejects a stale total; the original itemisation, cancellation policy and price version are retained. Changing settings never reprices existing bookings. Prices and drive times are illustrative and require operator review.
-
-Journey times are UTC epoch milliseconds; inputs and displays are Europe/Athens. The conversion explicitly rejects invalid dates and skipped/repeated daylight-saving wall times instead of silently selecting an offset. Airport pickup time is scheduled landing + chosen collection buffer. Operations can adjust pickup for a delay; no live flight provider is connected. Airport departure guidance asks travellers to allow sufficient airline check-in time. Return legs have independent times and assignments.
-
-## Security and privacy boundaries
-
-All operations APIs enforce the server-side allowlist from `ADMIN_EMAILS`. Production authentication is owned by the Sites dispatcher. **Do not expose the Worker directly to untrusted traffic that can spoof `oai-authenticated-user-*` headers.** A standalone hosting migration requires a trusted reverse proxy that strips client headers and injects verified identity, or replacement of `app/chatgpt-auth.ts` with a verified OIDC/session integration. Do not deploy this auth header trust model directly to an ordinary public Worker URL.
-
-Writes require same-origin JSON, schema validation and bounded request bodies. Public quote/book/lookup endpoints have persistent rate limits. Lookup returns only status, price and journey information after matching a high-entropy booking reference and email; internal notes, contact details and driver identity are excluded. State mutation is transactional and versioned. Public clients cannot set price, payment status or assignments. React escapes rendered input. CSV cells neutralise formula prefixes. Admin/API responses are not cached.
-
-Privacy acknowledgement is versioned and timestamped; marketing permission is independent. No card details are stored. Customer special requests should not contain sensitive medical information. The privacy page is an editable draft, not an assertion of legal compliance. Retention and subject-access/deletion handling must be operationally approved and implemented for the real business before collecting real personal data. Exports contain personal data and are restricted to admins. Logs must not be used to store request bodies or contact details.
-
-## Notification integration
-
-Default: demo/manual-payment mode. In-app notifications are saved immediately. Email/push events remain `queued` until a real provider is configured. Operations → Notifications → **Process delivery queue** invokes the adapter; it does not claim email delivery without a provider.
-
-Set both server-only environment values:
-
-```dotenv
-NOTIFICATION_WEBHOOK_URL=https://your-provider.example/transfer-events
-NOTIFICATION_WEBHOOK_TOKEN=your-server-side-token
-```
-
-The adapter posts JSON containing `id`, `event`, reference, status/journey data and recipients with `Authorization: Bearer …` and `Idempotency-Key: <outbox id>`. A successful 2xx records acceptance by the provider, not arrival in an inbox. The provider can render a customer confirmation email and notify operator email/push recipients. Configure its credentials outside this repository. Use text-safe templates and validate recipients. Never point it at an arbitrary URL entered by a public visitor.
-
-Delivery is at-least-once; the receiver must deduplicate the idempotency key. Attempts are recorded, failures are retryable up to five attempts, and a 15-minute lease recovers interrupted sends. Exhausted attempts need operator investigation. Automatic queue scheduling and provider delivery/bounce receipts are deployment integration work; the MVP provides the manual authenticated drain. No real payment, SMS, email or push provider credentials are included.
-
-## Checks
+Generate a session secret locally:
 
 ```sh
-npm run typecheck
-npm run test:domain
-# Keep the local dev server running first:
-npm run test:integration
-npm run build
+node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Integration checks only accept a localhost origin. Set `TEST_ORIGIN` if using another port. They create fictional demo requests and leave them cancelled for inspection. Checks cover a round-trip quote, arrival buffer, capacity and flight validation, price tampering, duplicate submissions, auth, CSRF, lookup data minimisation, invalid transitions, stale edits, overlap transaction rollback, cancellation release, queued notifications and CSV. Domain checks cover DST gaps/ambiguity, summer/winter offsets, invalid dates and CSV escaping. Do not run repeated integration suites against production.
+Put the result in `NEXTAUTH_SECRET`. Never commit or share `.env.local`. No secret uses a `NEXT_PUBLIC_` prefix.
 
-## Deployment
+## Google admin sign-in
 
-**Current status:** source saved; initial hosted deployment failed with `incomplete input: SQLITE_ERROR`. The local app is working. See [DEPLOYMENT-STATUS.md](DEPLOYMENT-STATUS.md) for the exact Site/version/deployment IDs and safe recovery steps. No live URL is claimed.
+1. Create a Google Cloud OAuth **Web application** client. Configure the consent screen and add your account as a test user if the application is in testing mode.
+2. Add the exact redirect URI `http://localhost:3000/api/auth/callback/google`.
+3. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NEXTAUTH_SECRET`, and `NEXTAUTH_URL=http://localhost:3000`.
+4. Set `ADMIN_EMAILS=andrea.tallaros7@gmail.com`. Additional admins may be listed with commas.
 
-The source has a registered private Sites project in `.openai/hosting.json`. A successful build emits `dist/server/index.js`, client assets and migration metadata. The initial project is private; public visitors are not enabled merely by creating the customer-facing pages.
+Only verified Google email addresses on this server-side allowlist can sign in. Every admin API checks the session and current allowlist. Sessions expire after eight hours; production cookies are secure and HTTP-only. OAuth uses state and PKCE, and NextAuth protects its POST endpoints against CSRF. No password or development login bypass is included. Old Sites cookies/headers grant no access.
 
-For Sites: use the Sites source workflow to push this exact source, build/package the matching version, save it and deploy. Sites applies the checked-in migrations and provisions the declared `DB` binding. Set production `ADMIN_EMAILS` to the real authorised sign-in email(s), comma-separated. It currently uses the placeholder `admin@example.com`, so the hosted operations dashboard remains inaccessible until configured. Configure `PUBLIC_ORIGIN` to the final trusted origin and update sitemap/canonical URLs when changing domains. The source files alone do not establish a live deployment; refer to the deployment status returned by Sites.
+Google's callback configuration is documented at https://next-auth.js.org/providers/google.
 
-For a demo deployment, set `SEED_ENABLED=true` once so the first catalog request fills the empty database. For the real service use a clean production database with reviewed configuration, real drivers/vehicles and no sample bookings; disable automatic demo seeding. Keep migrations immutable once applied. Back up the database and test restore/rollback procedures before publishing changes. Secrets belong in the runtime, never in the hosting manifest or browser.
+## Deploy to a new Vercel project
 
-Before opening to customers: configure a real administrator, business identity/contact information, verified prices/tax treatment, cancellation terms, privacy/retention process, notification provider and delivery monitoring. Review capacity and transport operations, run mobile/keyboard/screen-reader and load tests, and measure Core Web Vitals on the actual deployed origin. Responsive layouts, visible focus, semantic forms, reduced-motion handling and a compressed local hero asset are implemented; a formal accessibility audit or field CWV score is not claimed.
+1. Import `froggyflex/cos-coast` from GitHub. Select **Next.js**, repository root `./`, Node.js **22.x**. Build: `npm run build`; install: `npm ci`. No custom output directory.
+2. Add the server environment variables from `.env.example` to Vercel. Copy secret values directly from your private local file to Vercel's environment settings, never to the repository or chat.
+3. Use the project's stable domain for both `NEXTAUTH_URL` and `PUBLIC_ORIGIN`, for example `https://YOUR-PROJECT.vercel.app`. Do not include a trailing path. Keep `ALLOW_INDEXING=false` for testing and `SEED_ENABLED=false` after the demo seed has run.
+4. Add `https://YOUR-PROJECT.vercel.app/api/auth/callback/google` to the Google OAuth client's authorized redirect URIs. Add the custom-domain equivalent if/when you use one.
+5. Ensure Atlas allows the Vercel deployment to connect. The successful local connection does not establish Vercel network access.
+6. Deploy. Changing environment variables requires a redeployment. Database setup and seeding are explicit commands, **not** build steps. This prevents every deployment from mutating business data.
+7. Test the public quote → review → request → reference → status-lookup flow. Sign in as the allowed Google account, confirm the request, assign a matching vehicle/driver, update its operational steps and payment status, then export CSV.
 
-## MVP boundaries
+Prefer a separate Atlas database or collection prefix and OAuth client for Preview deployments. A stable staging domain avoids continually adding callback URLs for ephemeral preview domains. Never point untrusted branch previews at live customer data. Region `fra1` is configured as a European default; choose a region near your Atlas cluster if different.
 
-No payment gateway, refunds, flight tracking, driver mobile app, map geocoding or route optimiser is connected. Schedule is a chronological per-day agenda, not a drag-and-drop month planner. List and KPI queries currently use the latest 1,000 bookings; schedule uses 2,000 legs. CSV exports all records. Larger operations should add server-side pagination, aggregate reporting and streaming exports. Route or passenger changes to an existing priced booking should be handled by cancellation/rebooking; contact, pickup address/time, flight number, assignment, notes and payment records are editable. Historical audit data is stored but not cryptographically tamper-evident. These are explicit extension points rather than fake integrations.
+## What works
+
+- Airport, port, hotel/villa, private and business journeys; one-way and return; exact property addresses; passengers, luggage, child seats, flight/ferry numbers and extras.
+- Validated Athens-local dates, airport arrival buffers, vehicle capacity filtering, route-based EUR quotes, saved price/cancellation snapshots, contact/consent capture, idempotent requests and reference/email lookup.
+- Operations overview, list/search/filter, dated journey schedule, manual booking creation, contact and request editing, internal notes, payment tracking, driver/vehicle dispatch, in-app notifications and CSV export.
+- Configurable destinations, zones, routes, prices, extras, vehicle classes, resources, business details, cancellation wording and notification recipients.
+- Atomic booking/customer/journey/outbox/audit writes; optimistic booking versions; safe concurrent availability checks; auditable status and dispatch changes.
+- Demo/manual payment mode. No card charge, refund, automatic flight monitoring, email or SMS is invented.
+
+Requests are **pending** until operations confirms them. Vehicle selection checks capacity/class; it does not reserve a particular car. Dispatch reserves driver and vehicle time, including turnaround. The schedule/list currently displays the latest 2,000 journey legs; CSV exports all legs. Add server pagination/aggregated KPIs before growing beyond this operating volume.
+
+## Database setup and schema
+
+`lib/setup-db.ts` is the versioned, additive MongoDB schema/index setup (version 1); `npm run db:setup` is repeatable. MongoDB does not use SQL migrations. Old D1/Drizzle code was removed from the active project and remains in Git history. No existing remote D1 database was changed by this migration.
+
+| Collections (prefix `transfer_`) | Purpose |
+| --- | --- |
+| `bookings`, `customers`, `legs`, `booking_extras` | Booking header, contact, outbound/return journeys, purchased extras |
+| `zones`, `destinations`, `routes`, `vehicle_types`, `extras` | Configurable catalogue and integer-cent pricing |
+| `drivers`, `vehicles` | Operational resources and vehicle class |
+| `notifications`, `outbox` | In-app events and provider delivery queue |
+| `audit`, `settings`, `locks`, `rate_limits` | Audit history, business/schema settings, dispatch serialization, expiring abuse limits |
+
+All records have string `id` values. Booking references and idempotency keys are unique; a route's unordered zone pair and a vehicle's registration are unique. Legs reference bookings/destinations/resources. Times are UTC epoch milliseconds; currency is EUR integer cents. Rate-limit expiry is a BSON Date with a TTL index. Business settings and immutable quoted line items are embedded objects. Request schemas and reference validation live in `lib/domain.ts`, `lib/bookings.ts`, and `lib/settings.ts`; MongoDB additionally validates record IDs. Direct database edits bypass application invariants and should be restricted to operators who understand them.
+
+Atlas transactions use snapshot reads and majority writes. Dispatch/settings transactions first update a shared schedule lock document. That makes competing assignments conflict and retry before checking availability, avoiding snapshot write-skew. Reservation intervals are half-open (`start < otherEnd && end > otherStart`). Cancelled/completed bookings and completed/no-show legs release reservations. For a larger fleet, replace the single serialization document with consistently ordered resource locks.
+
+The demo seed uses upserts with `$setOnInsert`, so rerunning does not overwrite edits. It includes ten destinations, four vehicle classes, example rates and extras, two fictional drivers, four vehicles and three fictional bookings. Demo rates are illustrative and must be reviewed before real bookings.
+
+## Notification provider adapter
+
+Without `NOTIFICATION_WEBHOOK_URL` and `NOTIFICATION_WEBHOOK_TOKEN`, external events remain queued. In-app notifications still work. With those configured, the admin notification screen can drain a small batch. The provider receives an HTTPS JSON POST with a bearer token and stable `Idempotency-Key`:
+
+```json
+{"id":"event-uuid","event":"booking.requested","reference":"KOS-...","customerEmail":"guest@example.com","recipients":["operations@example.com"],"status":"pending","demo":false}
+```
+
+Events: `booking.requested`, `booking.status_changed`, `journey.updated`. Request events also include the quote total, customer name and journey details. The receiver should validate the token, deduplicate IDs, render email/push templates and return 2xx after accepting delivery. Never expose the token to a client. Failed events retry up to five attempts; stale delivery leases recover after 15 minutes. Demo events stay held unless `NOTIFICATION_SEND_DEMO=true` is explicitly set. Delivery is at-least-once, not exactly-once. No provider is configured by default.
+
+For unattended production delivery, invoke the same adapter from an authenticated queue/worker or scheduler and monitor exhausted retries. Manual drain is intentional for this testing MVP; setting a URL alone does not enable background delivery. Payment statuses are administrative records only; add a payment provider with signed webhooks and idempotent reconciliation before taking cards online.
+
+## Verification
+
+```sh
+npm run lint
+npm run typecheck
+npm run test:domain
+npm run test:integration
+npm run build
+npm start
+```
+
+Integration tests use the configured Atlas connection but create a unique `test_<uuid>_` collection namespace, exercise the real database and remove only that namespace in `finally`. They never drop the database or application collections. Interrupted test runs may leave their isolated test namespace for explicit cleanup. Tests include concurrent idempotency, resource contention, transactional rollback, cancellation release, operational workflow, quote rejection, rate limits, origin validation and Google allowlist rules. Actual Google consent/sign-in must also be tested interactively by the account owner.
+
+## Before accepting real customers
+
+Review real prices, fleet/contact details, cancellation/retention policies and the privacy notice. Replace visible demo copy, switch business demo mode off, disable demo seeding, and enable indexing only when public launch is intended. Configure backup/restore, error and queue monitoring, production network access, and any external provider contracts/credentials. The privacy page is a draft, not legal certification. Accessibility and load behaviour should be validated with representative devices and real traffic; no measured Core Web Vitals guarantee is claimed.

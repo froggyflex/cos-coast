@@ -40,6 +40,7 @@ const initial = {
   vehicleType: "",
 };
 export default function Booking({ manual = false }: { manual?: boolean }) {
+  const [now, setNow] = useState<number | null>(null);
   const [c, setC] = useState<any>(null),
     [j, setJ] = useState(initial),
     [contact, setContact] = useState({
@@ -63,6 +64,7 @@ export default function Booking({ manual = false }: { manual?: boolean }) {
     api("catalog")
       .then((x) => {
         setC(x);
+        setNow(Date.now());
         setJ((v) => ({ ...v, arrivalBuffer: x.business?.arrivalBuffer ?? 45 }));
       })
       .catch((e) => setError(e.message));
@@ -82,7 +84,7 @@ export default function Booking({ manual = false }: { manual?: boolean }) {
     if (step === 0) {
       setBusy(true);
       try {
-        const quote = await api("quote", {
+        const quote = await api(manual ? "admin/quote" : "quote", {
           ...j,
           vehicleType: undefined,
           returnDateTime: returnTrip ? j.returnDateTime : "",
@@ -315,7 +317,16 @@ export default function Booking({ manual = false }: { manual?: boolean }) {
                   <input
                     required
                     type="datetime-local"
-                    min={localTime(Date.now() + 2 * 3600000)}
+                    min={
+                      now
+                        ? localTime(
+                            now +
+                              (manual
+                                ? 0
+                                : (c.business?.leadMinutes ?? 120) * 60000),
+                          )
+                        : undefined
+                    }
                     value={j.dateTime}
                     onChange={(e) => update("dateTime", e.target.value)}
                   />

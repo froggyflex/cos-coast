@@ -1,124 +1,160 @@
+import { admin } from "@/lib/admin-auth";
 import { z } from "zod";
 import { catalog, quote } from "@/lib/quote";
-import { createBooking, detail, editBooking, editLeg } from "@/lib/bookings";
-import { admin, body, json, failure, HttpError, limit } from "@/lib/security";
-import { rows, one, stmt, db, config } from "@/lib/db";
+import {
+  createBooking,
+  detail,
+  editBooking,
+  editLeg,
+  journeyDetails,
+} from "@/lib/bookings";
+import { body, json, failure, HttpError, limit } from "@/lib/security";
+import { all, one, collection, config } from "@/lib/db";
 import { deliver } from "@/lib/providers";
 import { seed } from "@/lib/seed";
+import { saveSettings } from "@/lib/settings";
+import { bookingList, schedule } from "@/lib/queries";
 import { csvCell } from "@/lib/domain";
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+export const maxDuration = 60;
 async function handle(req: Request) {
   try {
     const parts = new URL(req.url).pathname.split("/").filter(Boolean).slice(1),
       method = req.method;
-    if (parts[0] === "catalog" && method === "GET")
+    if (parts.length === 1 && parts[0] === "catalog" && method === "GET")
       return json(await catalog());
-    if (parts[0] === "quote" && method === "POST") {
+    if (parts.length === 1 && parts[0] === "quote" && method === "POST") {
       const p = await body(req);
       await limit(req, "quote", 100);
       return json(await quote(p));
     }
-    if (parts[0] === "bookings" && method === "POST") {
+    if (parts.length === 1 && parts[0] === "bookings" && method === "POST") {
       const p = await body(req);
       await limit(req, "booking", 15);
       return json(await createBooking(p), 201);
     }
-    if (parts[0] === "lookup" && method === "POST") {
+    if (parts.length === 1 && parts[0] === "lookup" && method === "POST") {
       const p = z
-        .object({ reference: z.string().max(40), email: z.string().email() })
+        .object({
+          reference: z.string().trim().max(40),
+          email: z.string().trim().email().max(200),
+        })
         .parse(await body(req));
       await limit(req, "lookup", 15);
-      const b = await one(
-        "SELECT b.id,b.reference,b.status,b.payment_status,b.total_cents,b.quote,b.demo FROM bookings b JOIN customers c ON c.id=b.customer_id WHERE b.reference=? AND c.email=?",
-        p.reference.trim().toUpperCase(),
-        p.email.trim().toLowerCase(),
-      );
-      if (!b)
+      const b = await one("bookings", { reference: p.reference.toUpperCase() });
+      const customer =
+        b &&
+        (await one("customers", {
+          id: b.customer_id,
+          email: p.email.toLowerCase(),
+        }));
+      if (!b || !customer)
         throw new HttpError(
           404,
           "No matching booking was found. Check the reference and email.",
         );
       return json({
-        ...b,
-        id: undefined,
-        quote: JSON.parse(b.quote),
-        legs: await rows(
-          "SELECT l.direction,l.pickup_at,l.operational_status,p.name pickup_name,d.name dropoff_name FROM legs l JOIN destinations p ON p.id=l.pickup_id JOIN destinations d ON d.id=l.dropoff_id WHERE l.booking_id=? ORDER BY l.pickup_at",
-          b.id,
-        ),
+        reference: b.reference,
+        status: b.status,
+        payment_status: b.payment_status,
+        total_cents: b.total_cents,
+        quote: b.quote,
+        demo: b.demo,
+        legs: (await journeyDetails(b.id)).map((l) => ({
+          direction: l.direction,
+          pickup_at: l.pickup_at,
+          operational_status: l.operational_status,
+          pickup_name: l.pickup_name,
+          dropoff_name: l.dropoff_name,
+        })),
       });
     }
     if (parts[0] !== "admin") throw new HttpError(404, "Not found.");
-    const user = await admin();
-    const p = method === "POST" ? await body(req) : null;
-    if (parts[1] === "schedule" && method === "GET")
-      return json(
-        await rows(
-          `SELECT l.id,l.booking_id,l.direction,l.pickup_at,l.operational_status,b.reference,b.status,c.name,c.email,p.name || ' → ' || d.name route,dr.name driver_name,v.name vehicle_name FROM legs l JOIN bookings b ON b.id=l.booking_id JOIN customers c ON c.id=b.customer_id JOIN destinations p ON p.id=l.pickup_id JOIN destinations d ON d.id=l.dropoff_id LEFT JOIN drivers dr ON dr.id=l.driver_id LEFT JOIN vehicles v ON v.id=l.vehicle_id ORDER BY l.pickup_at DESC LIMIT 2000`,
-        ),
-      );
-    if (parts[1] === "seed" && method === "POST") {
+    const user = await admin(),
+      p = method === "POST" ? await body(req) : null;
+    const action = parts.slice(1).join("/");
+    if (action === "schedule" && method === "GET")
+      return json(await schedule());
+    if (action === "quote" && method === "POST")
+      return json(await quote(p, true));
+    if (action === "seed" && method === "POST") {
       await seed();
       return json({ ok: true });
     }
-    if (parts[1] === "bookings" && parts.length === 2) {
-      if (method === "POST")
-        return json(await createBooking(p, user.email, true), 201);
-      const list = await rows(
-        "SELECT b.id,b.reference,b.status,b.payment_status,b.total_cents,b.created_at,b.demo,c.name,c.email,c.phone,MIN(l.pickup_at) pickup_at,GROUP_CONCAT(p.name || ' → ' || d.name, ' / ') route FROM bookings b JOIN customers c ON c.id=b.customer_id JOIN legs l ON l.booking_id=b.id JOIN destinations p ON p.id=l.pickup_id JOIN destinations d ON d.id=l.dropoff_id GROUP BY b.id ORDER BY pickup_at DESC LIMIT 1000",
-      );
-      return json(list);
-    }
+    if (action === "bookings")
+      return method === "POST"
+        ? json(await createBooking(p, user.email, true), 201)
+        : json(await bookingList());
     if (parts[1] === "bookings" && parts[2]) {
-      if (parts[3] === "legs" && parts[4] && method === "POST")
+      if (parts.length === 5 && parts[3] === "legs" && method === "POST")
         return json(await editLeg(parts[2], parts[4], p, user.email));
-      if (method === "POST")
-        return json(await editBooking(parts[2], p, user.email));
-      return json(await detail(parts[2]));
+      if (parts.length === 3)
+        return json(
+          method === "POST"
+            ? await editBooking(parts[2], p, user.email)
+            : await detail(parts[2]),
+        );
     }
-    if (parts[1] === "resources" && method === "GET")
+    if (action === "resources" && method === "GET")
       return json({
-        drivers: await rows("SELECT * FROM drivers"),
-        vehicles: await rows("SELECT * FROM vehicles"),
-        types: await rows("SELECT * FROM vehicle_types"),
+        drivers: await all("drivers"),
+        vehicles: await all("vehicles"),
+        types: await all("vehicle_types"),
       });
-    if (parts[1] === "notifications") {
+    if (action === "notifications") {
       if (method === "POST") {
-        await stmt(
-          "UPDATE notifications SET read_at=? WHERE read_at IS NULL",
-          Date.now(),
-        ).run();
+        await (
+          await collection("notifications")
+        ).updateMany({ read_at: null }, { $set: { read_at: Date.now() } });
         return json({ ok: true });
       }
       return json({
-        notifications: await rows(
-          "SELECT * FROM notifications ORDER BY created_at DESC LIMIT 100",
-        ),
-        outbox: await rows(
-          "SELECT id,event,status,attempts,last_error,created_at FROM outbox ORDER BY created_at DESC LIMIT 100",
-        ),
+        notifications: await (
+          await collection("notifications")
+        )
+          .find({}, { projection: { _id: 0 } })
+          .sort({ created_at: -1 })
+          .limit(100)
+          .toArray(),
+        outbox: await (
+          await collection("outbox")
+        )
+          .find(
+            {},
+            {
+              projection: {
+                _id: 0,
+                id: 1,
+                event: 1,
+                status: 1,
+                attempts: 1,
+                last_error: 1,
+                created_at: 1,
+              },
+            },
+          )
+          .sort({ created_at: -1 })
+          .limit(100)
+          .toArray(),
       });
     }
-    if (parts[1] === "deliver" && method === "POST")
-      return json(await deliver());
-    if (parts[1] === "settings") {
-      if (method === "GET")
-        return json({
-          business: await config(),
-          zones: await rows("SELECT * FROM zones"),
-          destinations: await rows("SELECT * FROM destinations"),
-          routes: await rows("SELECT * FROM routes"),
-          extras: await rows("SELECT * FROM extras"),
-          drivers: await rows("SELECT * FROM drivers"),
-          vehicles: await rows("SELECT * FROM vehicles"),
-          types: await rows("SELECT * FROM vehicle_types"),
-        });
-      if (method === "POST") return json(await saveSettings(p));
+    if (action === "deliver" && method === "POST") return json(await deliver());
+    if (action === "settings") {
+      if (method === "POST") return json(await saveSettings(p, user.email));
+      return json({
+        business: await config(),
+        zones: await all("zones"),
+        destinations: await all("destinations"),
+        routes: await all("routes"),
+        extras: await all("extras"),
+        drivers: await all("drivers"),
+        vehicles: await all("vehicles"),
+        types: await all("vehicle_types"),
+      });
     }
-    if (parts[1] === "export" && method === "GET") {
-      const list = await rows(
-        "SELECT b.reference,b.status,b.payment_status,b.total_cents,c.name,c.email,c.phone,l.direction,l.pickup_at,l.flight_number,l.driver_id,l.vehicle_id FROM bookings b JOIN customers c ON c.id=b.customer_id JOIN legs l ON l.booking_id=b.id ORDER BY l.pickup_at",
-      );
+    if (action === "export" && method === "GET") {
+      const list = await schedule(true);
       const columns = [
         "reference",
         "status",
@@ -162,104 +198,3 @@ async function handle(req: Request) {
 }
 export const GET = handle;
 export const POST = handle;
-const str = z.string().trim().min(1).max(300),
-  id = z
-    .string()
-    .regex(/^[a-z0-9-]+$/)
-    .max(80),
-  active = z.coerce.number().int().min(0).max(1),
-  money = z.coerce.number().int().min(0).max(10000000);
-async function saveSettings(p: any) {
-  const entity = z
-    .enum([
-      "business",
-      "zones",
-      "destinations",
-      "routes",
-      "extras",
-      "drivers",
-      "vehicles",
-      "types",
-    ])
-    .parse(p.entity);
-  if (entity === "business") {
-    const v = z
-      .object({
-        name: str,
-        email: z.string().email(),
-        phone: z.string().max(40),
-        cancellation: z.string().min(10).max(3000),
-        privacy: z.string().min(10).max(5000),
-        notificationRecipients: z.array(z.string().email()).min(1).max(10),
-        leadMinutes: z.coerce.number().int().min(30).max(10080),
-        turnaroundMinutes: z.coerce.number().int().min(0).max(180),
-        childSeatCents: money,
-        arrivalBuffer: z.coerce.number().int().min(15).max(180),
-        demo: z.boolean(),
-      })
-      .parse(p.value);
-    await stmt(
-      "INSERT INTO settings(id,value) VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
-      "business",
-      JSON.stringify({ ...v, pricingVersion: Date.now() }),
-    ).run();
-    return { ok: true };
-  }
-  const maps: any = {
-    zones: { schema: z.object({ id, name: str }), table: "zones" },
-    destinations: {
-      schema: z.object({
-        id,
-        name: str,
-        zone_id: id,
-        kind: z.enum(["airport", "port", "hotel"]),
-        active,
-      }),
-      table: "destinations",
-    },
-    routes: {
-      schema: z.object({
-        id,
-        from_zone: id,
-        to_zone: id,
-        cents: money,
-        minutes: z.coerce.number().int().min(5).max(600),
-      }),
-      table: "routes",
-    },
-    extras: {
-      schema: z.object({ id, name: str, cents: money, active }),
-      table: "extras",
-    },
-    drivers: {
-      schema: z.object({ id, name: str, phone: str, active }),
-      table: "drivers",
-    },
-    vehicles: {
-      schema: z.object({ id, name: str, plate: str, type_id: id, active }),
-      table: "vehicles",
-    },
-    types: {
-      schema: z.object({
-        id,
-        name: str,
-        passengers: z.coerce.number().int().min(1).max(50),
-        luggage: z.coerce.number().int().min(0).max(50),
-        multiplier: z.coerce.number().int().min(50).max(1000),
-        description: str,
-      }),
-      table: "vehicle_types",
-    },
-  };
-  const rule = maps[entity],
-    v = rule.schema.parse(p.value) as Record<string, any>,
-    keys = Object.keys(v);
-  await stmt(
-    `INSERT INTO ${rule.table}(${keys.join(",")}) VALUES (${keys.map(() => "?").join(",")}) ON CONFLICT(id) DO UPDATE SET ${keys
-      .filter((k) => k !== "id")
-      .map((k) => `${k}=excluded.${k}`)
-      .join(",")}`,
-    ...keys.map((k) => v[k]),
-  ).run();
-  return { ok: true };
-}

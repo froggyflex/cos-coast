@@ -1,7 +1,7 @@
-import { db, stmt, runtime } from "./db";
-// Explicit, idempotent demo seed; never run schema changes at request time.
+import { collection, transaction } from "./db";
+import type { CollectionName } from "./db";
 export async function seed() {
-  if (runtime().SEED_ENABLED !== "true")
+  if (process.env.SEED_ENABLED !== "true")
     throw new Error("Demo seeding is disabled.");
   const zones = [
     ["airport", "Airport & Antimachia"],
@@ -58,160 +58,165 @@ export async function seed() {
   ];
   const business = {
     name: "Kos Coast Transfers",
-    email: "admin@example.com",
+    email: "andrea.tallaros7@gmail.com",
     phone: "",
     cancellation:
       "Demo policy: request cancellation at least 24 hours before pickup for no charge. Later requests require operator review. No automatic charge or refund is made.",
     privacy:
-      "We use contact and journey details to handle your transfer request. Contact admin@example.com for access or deletion requests. No advertising cookies are used. Replace this demo notice with your approved privacy policy before launch.",
+      "We use contact and journey details to handle your transfer request. Contact andrea.tallaros7@gmail.com for access or deletion requests. No advertising cookies are used. Replace this demo notice with your approved privacy policy before launch.",
     leadMinutes: 120,
     turnaroundMinutes: 30,
     childSeatCents: 500,
     arrivalBuffer: 45,
     pricingVersion: 1,
-    notificationRecipients: ["admin@example.com"],
+    notificationRecipients: ["andrea.tallaros7@gmail.com"],
     demo: true,
   };
-  const batch = [
-    ...zones.map((x) =>
-      stmt("INSERT OR IGNORE INTO zones(id,name) VALUES (?,?)", ...x),
-    ),
-    ...destinations.map((x) =>
-      stmt(
-        "INSERT OR IGNORE INTO destinations(id,name,zone_id,kind) VALUES (?,?,?,?)",
-        ...x,
-      ),
-    ),
-    ...types.map((x) =>
-      stmt(
-        "INSERT OR IGNORE INTO vehicle_types(id,name,passengers,luggage,multiplier,description) VALUES (?,?,?,?,?,?)",
-        ...x,
-      ),
-    ),
-    stmt(
-      "INSERT OR IGNORE INTO settings(id,value) VALUES (?,?)",
-      "business",
-      JSON.stringify(business),
-    ),
-  ];
-  zones.forEach((a, i) =>
-    zones
-      .slice(i)
-      .forEach((b, k) =>
-        batch.push(
-          stmt(
-            "INSERT OR IGNORE INTO routes(id,from_zone,to_zone,cents,minutes) VALUES (?,?,?,?,?)",
-            a[0] + "-" + b[0],
-            a[0],
-            b[0],
+
+  await transaction(async (session) => {
+    async function put(
+      name: CollectionName,
+      value: Record<string, any> & { id: string },
+    ) {
+      await (
+        await collection(name)
+      ).updateOne(
+        { id: value.id },
+        { $setOnInsert: value },
+        { upsert: true, session },
+      );
+    }
+    for (const [id, name] of zones) await put("zones", { id, name });
+    for (const [id, name, zone_id, kind] of destinations)
+      await put("destinations", { id, name, zone_id, kind, active: 1 });
+    for (const [
+      id,
+      name,
+      passengers,
+      luggage,
+      multiplier,
+      description,
+    ] of types)
+      await put("vehicle_types", {
+        id: String(id),
+        name,
+        passengers,
+        luggage,
+        multiplier,
+        description,
+      });
+    await put("settings", { id: "business", value: business });
+    for (let i = 0; i < zones.length; i++)
+      for (let j = i; j < zones.length; j++) {
+        const from_zone = zones[i][0],
+          to_zone = zones[j][0],
+          k = j - i;
+        await put("routes", {
+          id: from_zone + "-" + to_zone,
+          from_zone,
+          to_zone,
+          pair: [from_zone, to_zone].sort().join(":"),
+          cents:
             i === 0
               ? [2000, 4500, 3500, 3000, 4000][k]
-              : i === i + k
+              : k === 0
                 ? 2000
                 : 3500 + k * 500,
-            i === i + k ? 15 : 25 + k * 8,
-          ),
-        ),
-      ),
-  );
-  for (const x of [
-    ["water", "Bottled water", 200],
-    ["meet", "Personalised welcome sign", 500],
-  ])
-    batch.push(
-      stmt("INSERT OR IGNORE INTO extras(id,name,cents) VALUES (?,?,?)", ...x),
-    );
-  for (const x of [
-    ["driver-1", "Nikos · demo", "+30 0000000000"],
-    ["driver-2", "Maria · demo", "+30 0000000000"],
-  ])
-    batch.push(
-      stmt("INSERT OR IGNORE INTO drivers(id,name,phone) VALUES (?,?,?)", ...x),
-    );
-  for (const x of [
-    ["car-1", "Comfort sedan · demo", "DEMO-001", "sedan"],
-    ["car-2", "Executive car · demo", "DEMO-002", "executive"],
-    ["van-1", "Private minivan · demo", "DEMO-003", "van"],
-    ["bus-1", "Group minibus · demo", "DEMO-004", "minibus"],
-  ])
-    batch.push(
-      stmt(
-        "INSERT OR IGNORE INTO vehicles(id,name,plate,type_id) VALUES (?,?,?,?)",
-        ...x,
-      ),
-    );
-  const now = Date.now();
-  for (const [i, name, status] of [
-    [1, "Alex Morgan · demo", "pending"],
-    [2, "Sofia Taylor · demo", "confirmed"],
-    [3, "Jamie Lee · demo", "new"],
-  ] as const) {
-    const id = `sample-${i}`,
-      at = now + (i + 1) * 86400000;
-    const q = {
-      name: "Comfort sedan",
-      items: [{ label: "Comfort sedan · 1 journey", cents: 4500 }],
-      totalCents: 4500,
-      currency: "EUR",
-      taxIncluded: true,
-      cancellation: business.cancellation,
-      pricingVersion: 1,
-    };
-    batch.push(
-      stmt(
-        "INSERT OR IGNORE INTO customers(id,name,email,phone) VALUES (?,?,?,?)",
+          minutes: k === 0 ? 15 : 25 + k * 8,
+        });
+      }
+    for (const [id, name, cents] of [
+      ["water", "Bottled water", 200],
+      ["meet", "Personalised welcome sign", 500],
+    ])
+      await put("extras", { id: String(id), name, cents, active: 1 });
+    for (const [id, name] of [
+      ["driver-1", "Nikos · demo"],
+      ["driver-2", "Maria · demo"],
+    ])
+      await put("drivers", { id, name, phone: "+30 0000000000", active: 1 });
+    for (const [id, name, plate, type_id] of [
+      ["car-1", "Comfort sedan · demo", "DEMO-001", "sedan"],
+      ["car-2", "Executive car · demo", "DEMO-002", "executive"],
+      ["van-1", "Private minivan · demo", "DEMO-003", "van"],
+      ["bus-1", "Group minibus · demo", "DEMO-004", "minibus"],
+    ])
+      await put("vehicles", { id, name, plate, type_id, active: 1 });
+    const now = Date.now();
+    for (const [i, name, status] of [
+      [1, "Alex Morgan · demo", "pending"],
+      [2, "Sofia Taylor · demo", "confirmed"],
+      [3, "Jamie Lee · demo", "new"],
+    ] as const) {
+      const id = "sample-" + i,
+        at = now + (i + 1) * 86400000,
+        reference = "KOS-DEMO-000" + i;
+      await put("customers", {
         id,
         name,
-        `guest${i}@example.com`,
-        "+30 0000000000",
-      ),
-      stmt(
-        "INSERT OR IGNORE INTO bookings(id,reference,idempotency_key,request_hash,customer_id,type,vehicle_type,passengers,luggage,child_seats,status,total_cents,quote,requests,consent_at,privacy_version,created_at,updated_at,updated_by,mutation_id,demo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        email: "guest" + i + "@example.com",
+        phone: "+30 0000000000",
+      });
+      await put("bookings", {
         id,
-        `KOS-DEMO-000${i}`,
-        id,
-        "demo",
-        id,
-        "airport",
-        "sedan",
-        2,
-        2,
-        0,
+        reference,
+        idempotency_key: id,
+        request_hash: "demo",
+        customer_id: id,
+        type: "airport",
+        vehicle_type: "sedan",
+        passengers: 2,
+        luggage: 2,
+        child_seats: 0,
         status,
-        4500,
-        JSON.stringify(q),
-        "Fictional seed record",
-        now,
-        "2026-10-01",
-        now,
-        now,
-        "demo seed",
+        payment_status: "unpaid",
+        total_cents: 4500,
+        quote: {
+          id: "sedan",
+          name: "Comfort sedan",
+          items: [{ label: "Comfort sedan · 1 journey", cents: 4500 }],
+          totalCents: 4500,
+          currency: "EUR",
+          taxIncluded: true,
+          cancellation: business.cancellation,
+          pricingVersion: 1,
+        },
+        requests: "Fictional seed record",
+        internal_notes: "",
+        consent_at: now,
+        privacy_version: "2026-10-01",
+        marketing: 0,
+        created_at: now,
+        updated_at: now,
+        updated_by: "demo seed",
+        version: 1,
+        demo: 1,
+      });
+      await put("legs", {
         id,
-        1,
-      ),
-      stmt(
-        "INSERT OR IGNORE INTO legs(id,booking_id,direction,pickup_id,dropoff_id,pickup_address,dropoff_address,scheduled_at,pickup_at,end_at,flight_number,arrival_buffer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        booking_id: id,
+        direction: "outbound",
+        pickup_id: "kgs",
+        dropoff_id: "kos-town",
+        pickup_address: "Airport arrivals",
+        dropoff_address: "Demo Seaside Hotel",
+        scheduled_at: at,
+        pickup_at: at + 45 * 60000,
+        end_at: at + 108 * 60000,
+        flight_number: "DEMO 123",
+        arrival_buffer: 45,
+        driver_id: null,
+        vehicle_id: null,
+        operational_status: "unassigned",
+        reserving: false,
+      });
+      await put("notifications", {
         id,
-        id,
-        "outbound",
-        "kgs",
-        "kos-town",
-        "Airport arrivals",
-        "Demo Seaside Hotel",
-        at,
-        at + 45 * 60000,
-        at + 108 * 60000,
-        "DEMO 123",
-        45,
-      ),
-      stmt(
-        "INSERT OR IGNORE INTO notifications(id,booking_id,message,created_at) VALUES (?,?,?,?)",
-        id,
-        id,
-        `Demo request KOS-DEMO-000${i}`,
-        now,
-      ),
-    );
-  }
-  await db().batch(batch);
+        booking_id: id,
+        message: "Demo request " + reference,
+        created_at: now,
+        read_at: null,
+      });
+    }
+  });
 }

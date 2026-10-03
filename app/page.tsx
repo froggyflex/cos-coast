@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { Header, Footer } from "@/components/shell";
 import Booking from "@/components/booking";
 import { Plane, Ship, Palmtree, Briefcase, Check, MapPin } from "lucide-react";
@@ -31,12 +32,13 @@ export default function Home() {
               </div>
             </div>
             <div className="island-photo">
-              <img
+              <Image
                 src="/aegean-abstract.webp"
                 alt="Abstract Aegean blue and sunlit ivory curves inspired by the Mediterranean"
-                width="1200"
-                height="900"
-                fetchPriority="high"
+                width={1200}
+                height={900}
+                preload
+                sizes="(max-width: 850px) 100vw, 50vw"
               />
               <div className="photo-label">
                 <MapPin size={18} />

@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   Waves,
@@ -13,8 +14,10 @@ import {
   RefreshCw,
 } from "lucide-react";
 import Booking, { api } from "./booking";
+import { SignOut } from "./auth-buttons";
 import { EUR, athens, localTime, transitions, operations } from "@/lib/domain";
 export default function Admin({ email }: { email: string }) {
+  const [now, setNow] = useState<number | null>(null);
   const [view, setView] = useState("overview"),
     [bookings, setBookings] = useState<any[]>([]),
     [schedule, setSchedule] = useState<any[]>([]),
@@ -30,10 +33,10 @@ export default function Admin({ email }: { email: string }) {
     [settings, setSettings] = useState<any>(null),
     [saving, setSaving] = useState(false);
   async function refresh() {
-    setLoading(true);
-    setError("");
     try {
       await api("catalog");
+      setError("");
+      setNow(Date.now());
       const [b, r, n, s, journeys] = await Promise.all([
         api("admin/bookings"),
         api("admin/resources"),
@@ -53,6 +56,8 @@ export default function Admin({ email }: { email: string }) {
     }
   }
   useEffect(() => {
+    // Initial external data fetch; refresh updates state only after network completion.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
   }, []);
   async function open(id: string) {
@@ -97,18 +102,18 @@ export default function Admin({ email }: { email: string }) {
         .toLowerCase()
         .includes(search.toLowerCase()),
   );
-  const today = localTime(Date.now()).slice(0, 10),
+  const today = now ? localTime(now).slice(0, 10) : "",
     unread =
       notifications?.notifications.filter((n: any) => !n.read_at).length ?? 0;
   return (
     <div className="admin-layout">
       <aside className="sidebar">
-        <a className="brand" href="/">
+        <Link className="brand" href="/">
           <Waves size={30} />
           <span>
             KOS COAST<small>OPERATIONS</small>
           </span>
-        </a>
+        </Link>
         <nav aria-label="Operations">
           {[
             ["overview", LayoutDashboard, "Overview"],
@@ -134,10 +139,8 @@ export default function Admin({ email }: { email: string }) {
         <div className="sidebar-bottom">
           <span>{email}</span>
           <span>Europe/Athens · EUR</span>
-          <a href="/">Customer website</a>
-          <a href="/signout-with-chatgpt?return_to=/admin" target="_top">
-            Sign out
-          </a>
+          <Link href="/">Customer website</Link>
+          <SignOut />
         </div>
       </aside>
       <main id="main" className="admin-main">
@@ -157,7 +160,10 @@ export default function Admin({ email }: { email: string }) {
                 }[view]
               }
             </h1>
-            <p>{athens(Date.now())} · All times shown in Kos local time</p>
+            <p>
+              {now ? athens(now) : "Kos, Greece"} · All times shown in Kos local
+              time
+            </p>
           </div>
           <div className="admin-actions">
             <button
@@ -168,7 +174,7 @@ export default function Admin({ email }: { email: string }) {
             >
               <RefreshCw size={16} />
             </button>
-            <a className="outline small" href="/api/admin/export">
+            <a className="outline small" href="/api/admin/export" download>
               <Download size={16} />
               Export
             </a>

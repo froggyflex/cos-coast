@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 export default function ErrorPage({ reset }: { reset: () => void }) {
   return (
     <main id="main" className="narrow card">
@@ -8,7 +9,7 @@ export default function ErrorPage({ reset }: { reset: () => void }) {
       </p>
       <button onClick={reset}>Reload page</button>
       <p>
-        <a href="/">Return to booking</a>
+        <Link href="/">Return to booking</Link>
       </p>
     </main>
   );

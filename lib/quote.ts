@@ -1,13 +1,15 @@
-import { rows, config, runtime } from "./db";
-import { seed } from "./seed";
+import { all, config } from "./db";
 import { fromAthens, journeySchema } from "./domain";
 import { HttpError } from "./security";
 export async function catalog() {
-  if (!(await config()) && runtime().SEED_ENABLED === "true") await seed();
   const [destinations, types, extras, business] = await Promise.all([
-    rows("SELECT * FROM destinations WHERE active=1 ORDER BY name"),
-    rows("SELECT * FROM vehicle_types ORDER BY multiplier"),
-    rows("SELECT * FROM extras WHERE active=1"),
+    all("destinations", { active: 1 }).then((v) =>
+      v.sort((a, b) => a.name.localeCompare(b.name)),
+    ),
+    all("vehicle_types").then((v) =>
+      v.sort((a, b) => a.multiplier - b.multiplier),
+    ),
+    all("extras", { active: 1 }),
     config(),
   ]);
   return {
@@ -22,6 +24,7 @@ export async function catalog() {
           cancellation: business.cancellation,
           privacy: business.privacy,
           arrivalBuffer: business.arrivalBuffer,
+          leadMinutes: business.leadMinutes,
           demo: business.demo,
         }
       : null,
@@ -30,10 +33,7 @@ export async function catalog() {
 export async function quote(input: unknown, manual = false) {
   const j = journeySchema.parse(input);
   const c = await catalog();
-  const [cfg, routes] = await Promise.all([
-    config(),
-    rows("SELECT * FROM routes"),
-  ]);
+  const [cfg, routes] = await Promise.all([config(), all("routes")]);
   if (!cfg)
     throw new HttpError(
       503,

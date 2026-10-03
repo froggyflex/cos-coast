@@ -1,5 +1,4 @@
-import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { db, runtime } from "./db";
+import { collection } from "./db";
 export class HttpError extends Error {
   constructor(
     public status: number,
@@ -7,19 +6,6 @@ export class HttpError extends Error {
   ) {
     super(message);
   }
-}
-export async function admin() {
-  const u = await getChatGPTUser();
-  if (!u) throw new HttpError(401, "Sign in to access operations.");
-  const allowed = (runtime().ADMIN_EMAILS ?? "admin@example.com")
-    .split(",")
-    .map((x) => x.trim().toLowerCase());
-  if (!allowed.includes(u.email.toLowerCase()))
-    throw new HttpError(
-      403,
-      "This account is not on the operations allowlist. Configure ADMIN_EMAILS with your real sign-in email.",
-    );
-  return u;
 }
 export function sameOrigin(req: Request) {
   const origin = req.headers.get("origin");
@@ -50,21 +36,32 @@ export async function hash(value: string) {
   ).join("");
 }
 export async function limit(req: Request, scope: string, max = 25) {
-  await db()
-    .prepare("DELETE FROM rate_limits WHERE expires_at<?")
-    .bind(Date.now())
-    .run();
   const bucket = Math.floor(Date.now() / 600000);
-  const key = await hash(
-    `${scope}:${req.headers.get("cf-connecting-ip") ?? "local"}:${bucket}`,
-  );
-  const row = await db()
-    .prepare(
-      "INSERT INTO rate_limits(id,count,expires_at) VALUES (?,1,?) ON CONFLICT(id) DO UPDATE SET count=count+1 RETURNING count",
-    )
-    .bind(key, Date.now() + 600000)
-    .first<{ count: number }>();
-  if ((row?.count ?? 0) > max)
+  // Vercel overwrites x-forwarded-for. Local/self-hosted defaults to one shared bucket.
+  const ip = process.env.VERCEL
+    ? req.headers.get("x-forwarded-for")?.split(",")[0].trim() || "unknown"
+    : "local";
+  const key = await hash(scope + ":" + ip + ":" + bucket);
+  const store = await collection("rate_limits");
+  let row;
+  try {
+    row = await store.findOneAndUpdate(
+      { id: key },
+      {
+        $inc: { count: 1 },
+        $setOnInsert: { expires_at: new Date((bucket + 1) * 600000) },
+      },
+      { upsert: true, returnDocument: "after" },
+    );
+  } catch (e) {
+    if ((e as { code?: number }).code !== 11000) throw e;
+    row = await store.findOneAndUpdate(
+      { id: key },
+      { $inc: { count: 1 } },
+      { returnDocument: "after" },
+    );
+  }
+  if (!row || row.count > max)
     throw new HttpError(
       429,
       "Too many attempts. Please try again in ten minutes.",
@@ -97,7 +94,7 @@ export function failure(e: unknown) {
       { error: "Driver or vehicle is already booked in this time window." },
       409,
     );
-  console.error("Request failed", e);
+  console.error("Request failed", e instanceof Error ? e.name : "UnknownError");
   return json(
     {
       error:

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Header, Footer } from "@/components/shell";
 export const metadata = { title: "Transfer services" };
 export default function Transfers() {
@@ -43,7 +44,7 @@ export default function Transfers() {
               <span className="eyebrow">{n}</span>
               <h2>{title}</h2>
               <p>{text}</p>
-              <a href="/#journey">Plan your journey</a>
+              <Link href="/#journey">Plan your journey</Link>
             </article>
           ))}
         </div>

@@ -1,16 +1,5 @@
-import { build } from "esbuild";
 import assert from "node:assert/strict";
-import { mkdir } from "node:fs/promises";
-await mkdir(".sites-runtime/tests", { recursive: true });
-await build({
-  entryPoints: ["lib/domain.ts"],
-  outfile: ".sites-runtime/tests/domain.mjs",
-  bundle: true,
-  platform: "node",
-  format: "esm",
-});
-const { fromAthens, localTime, csvCell, bookingSchema } =
-  await import("../.sites-runtime/tests/domain.mjs");
+import { fromAthens, localTime, csvCell, bookingSchema } from "../lib/domain";
 assert.equal(
   new Date(fromAthens("2027-01-10T12:00")).toISOString(),
   "2027-01-10T10:00:00.000Z",

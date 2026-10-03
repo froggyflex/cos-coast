@@ -1,5 +1,5 @@
-import { db, rows, stmt, runtime } from "./db";
-// Outbox delivery is at-least-once. Receivers MUST deduplicate Idempotency-Key.
+import { collection, runtime } from "./db";
+// At-least-once delivery: receivers must deduplicate the stable Idempotency-Key.
 export async function deliver() {
   const env = runtime();
   if (!env.NOTIFICATION_WEBHOOK_URL || !env.NOTIFICATION_WEBHOOK_TOKEN)
@@ -11,20 +11,38 @@ export async function deliver() {
   const url = new URL(env.NOTIFICATION_WEBHOOK_URL);
   if (url.protocol !== "https:")
     throw new Error("Notification provider must use HTTPS.");
-  await stmt(
-    "UPDATE outbox SET status='failed',last_error='Delivery lease expired; safe to retry with the same idempotency key' WHERE status='sending' AND last_attempt_at<?",
-    Date.now() - 15 * 60000,
-  ).run();
+  const outbox = await collection("outbox");
+  await outbox.updateMany(
+    { status: "sending", last_attempt_at: { $lt: Date.now() - 15 * 60000 } },
+    {
+      $set: {
+        status: "failed",
+        last_error:
+          "Delivery lease expired; retry uses the same idempotency key",
+      },
+    },
+  );
   let sent = 0;
-  for (const item of await rows(
-    "SELECT * FROM outbox WHERE status IN ('queued','failed') AND attempts<5 ORDER BY created_at LIMIT 20",
-  )) {
-    const claim = await stmt(
-      "UPDATE outbox SET status='sending',attempts=attempts+1,last_attempt_at=? WHERE id=? AND status IN ('queued','failed')",
-      Date.now(),
-      item.id,
-    ).run();
-    if (!claim.meta.changes) continue;
+  const attempted = new Set<string>();
+  for (let i = 0; i < 5; i++) {
+    const lease = crypto.randomUUID();
+    const item = await outbox.findOneAndUpdate(
+      {
+        status: { $in: ["queued", "failed"] },
+        attempts: { $lt: 5 },
+        id: { $nin: [...attempted] },
+        ...(env.NOTIFICATION_SEND_DEMO === "true"
+          ? {}
+          : { "payload.demo": { $ne: true } }),
+      },
+      {
+        $set: { status: "sending", last_attempt_at: Date.now(), lease },
+        $inc: { attempts: 1 },
+      },
+      { sort: { created_at: 1 }, returnDocument: "after" },
+    );
+    if (!item) break;
+    attempted.add(item.id);
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -38,29 +56,28 @@ export async function deliver() {
         body: JSON.stringify({
           id: item.id,
           event: item.event,
-          ...JSON.parse(item.payload),
+          ...item.payload,
         }),
       });
-      if (!res.ok) throw new Error(`Provider returned ${res.status}`);
-      await stmt(
-        "UPDATE outbox SET status='sent',last_error=NULL WHERE id=?",
-        item.id,
-      ).run();
+      if (!res.ok) throw new Error(`Provider returned HTTP ${res.status}`);
+      await outbox.updateOne(
+        { id: item.id, lease },
+        { $set: { status: "sent", last_error: null } },
+      );
       sent++;
     } catch (e) {
-      await stmt(
-        "UPDATE outbox SET status='failed',last_error=? WHERE id=?",
-        (e as Error).message.slice(0, 300),
-        item.id,
-      ).run();
+      const message =
+        e instanceof Error && e.message.startsWith("Provider returned HTTP ")
+          ? e.message
+          : "Provider unavailable or timed out. Retry later.";
+      await outbox.updateOne(
+        { id: item.id, lease },
+        { $set: { status: "failed", last_error: message } },
+      );
     }
   }
-  await db()
-    .prepare("DELETE FROM rate_limits WHERE expires_at<?")
-    .bind(Date.now())
-    .run();
   return {
     sent,
-    message: `${sent} notification event(s) delivered to the configured provider.`,
+    message: `${sent} notification event(s) delivered to the configured provider. Demo events are held unless explicitly enabled.`,
   };
 }
